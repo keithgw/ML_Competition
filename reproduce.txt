@@ -1,0 +1,17 @@
+## Reproduce Training Steps
+
+1. Download data and unzip from http://orwell.uncc.edu/6156/project.tar Can only be accessed from within UNCC network.
+
+2. Find empty data files in training data  
+    * findEmpty.py
+	* remove corresponding labels from train.csv
+	
+3. Process training images
+	* Resize each image to the modal image size. This will distort some of the images, but will allow for consistent data size representation.  
+	* Convert images to RBG matrices	
+		* train.py
+		
+4. Train Classifier
+
+
+	
