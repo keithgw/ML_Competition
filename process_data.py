@@ -54,34 +54,6 @@ def get_med_size(img_files):
     return (tuple(median_size.astype(int)), bad_files)
     
     
-def max_std_size(n_samples, img_dim, max_bytes):
-    """
-    Parameters
-    ----------
-    n_samples : int
-        number of training images
-    img_dim   : tuple
-        dimensions of equally sized images
-        
-    Returns
-    -------
-    tuple, new standard size that maintains dimension ratio 
-        if memory of array of RGB pixels exceeds max_bytes
-    """
-    d1, d2 = img_dim
-    ratio = float(d1) / d2
-    
-    bytes_needed = n_samples * d1 * d2 * 3 #3 RGB values per pixel
-    if bytes_needed > max_bytes:
-        scale = max_bytes / (d2 * ratio * d2)
-        new_d1, new_d2 = int(d1 * scale), int(d2 * scale)
-        new_dim = (new_d1, new_d2)
-    else:
-        new_dim = img_dim
-        
-    return new_dim        
-    
-    
 def represent_image(img_file, new_size):
     """
     Parameters
@@ -95,8 +67,13 @@ def represent_image(img_file, new_size):
     -------
     numpy array of RGB value matrix flattend to 1-D array
     """
-    # open and resize
-    img = Image.open(img_file).resize(new_size)
+    # open and convert to RGB if not already
+    img = Image.open(img_file)
+    if img.mode != 'RGB':
+        img = img.convert(mode='RGB')
+    
+    # Resize image
+    img = img.resize(new_size)
     
     # get RGB pixel values
     img = np.array(img.getdata())
@@ -107,7 +84,6 @@ def represent_image(img_file, new_size):
     
 def main():
     IMG_DIR = '../data/train/'
-    MAX_BYTES = 4e9  # 4 GB maximum for np.array representation of images
 
 ################################################################################
 ## Pre-Process the Data   
@@ -121,9 +97,7 @@ def main():
     img_files.sort() # ensure labels and examples are in same order
     
     # get standard size and empty or corrupted files
-    med_size, bad_files = get_med_size(img_files)
-    std_size = max_std_size(n_samples = len(img_files) - len(bad_files), 
-        img_dim = med_size, max_bytes = MAX_BYTES)
+    std_size, bad_files = get_med_size(img_files)
        
     # update image list and training labels to exclude empty or corrupted files
     #img_files = sorted(set(img_files).difference(bad_files))
@@ -132,12 +106,17 @@ def main():
     train_clean = train[~train.id.isin(bad_ids)]
     trainY = train_clean.values[:, 1:]
     
+    ## PICK TRAINING EXAMPLES FOR PCA BEFORE CONTINUING
+    
     # Represent images as flattened RGB Matrices of equal length
     m, n = len(img_clean), np.prod(std_size) * 3
     trainX = np.zeros((m, n), dtype='uint8')
     for i in range(m):
-        print img_clean[i]
-        trainX[i] = represent_image(img_clean[i], std_size)
+        try:
+            trainX[i] = represent_image(img_clean[i], std_size)
+        except ValueError as e:
+            print img_clean[i]
+            print e
     
 ################################################################################
 ## Partition the training data into train and validation
