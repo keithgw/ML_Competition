@@ -113,18 +113,17 @@ def main():
 ## Pre-Process the Data   
             
     # import training labels
-    train = pd.read_csv('../data/train.csv')
+    train = pd.read_csv('../data/train.csv', dtype={'id' : str})
+    train.sort_values('id', inplace=True) # Same order as img_file names
     
     # get image file paths
     img_files = [os.path.join(IMG_DIR, f) for f in os.listdir(IMG_DIR)]
-    
-    ## FIGURE OUT SORTING sort this list as strings, sort pd.trainX by id as string
+    img_files.sort() # ensure labels and examples are in same order
     
     # get standard size and empty or corrupted files
     med_size, bad_files = get_med_size(img_files)
     std_size = max_std_size(n_samples = len(img_files) - len(bad_files), 
         img_dim = med_size, max_bytes = MAX_BYTES)
-    print "standard size: ", std_size
        
     # update image list and training labels to exclude empty or corrupted files
     #img_files = sorted(set(img_files).difference(bad_files))
