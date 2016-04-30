@@ -9,13 +9,14 @@ Pre Process the training data
 import os
 import re
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFile
 import pandas as pd
-from sklearn.cross_validation import train_test_split
+#from sklearn.cross_validation import train_test_split
 from sklearn.decomposition import RandomizedPCA
+from time import time
+import dill
 
 # Allow for truncated images to load
-from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
@@ -81,9 +82,67 @@ def represent_image(img_file, new_size):
     # convert to 1-D numpy array
     return img.reshape(img.size)
     
+
+def reduce_dim(file_list, resize, pca=None):
+    """
+    Parameters
+    ----------
+    file_list : array like
+        List of image files to be transformed using principal components
+    resize  : tuple
+        Size to which images in file_list should be resized
+    pca       : class RandomizedPCA
+        Fit to training data.
+        If None, pca will be created from file_list
+    
+    Returns
+    -------
+    tuple :
+        pca class object,
+        numpy array (n_files, n_pca_components) of reduced dimensions
+    """
+    # Represent images as flattened RGB Matrices of equal length
+    m, n = len(file_list), np.prod(resize) * 3
+    raw_data = np.zeros((m, n), dtype='uint8')
+    print 'Converting {} images into RGB Vectors'.format(m)
+    t0 = time()
+    for i in range(m):
+        raw_data[i] = represent_image(file_list[i], resize)
+    print 'Finished in {sec:.{rd}f} seconds'.format(sec=time() - t0, rd=2)
+    
+    if pca is None:
+        # Get principal components from half the training data
+        components = 30 # determined by plotting PC
+        print 'Calculating principal components'
+        t0 = time()
+        pca = RandomizedPCA(n_components = components)
+        pca.fit(raw_data)
+        print 'Finished in {sec:.{rd}f} seconds'.format(sec=time() - t0, rd=2)
+        
+        # Save pca object
+        with open('pca.pkl', 'wb') as f:
+            dill.dump(pca, f)
+
+        
+    # create pandas DataFrame attaching pca representation to img id
+    n_pc = pca.get_params()['n_components']
+    pc_col_names = ['pc' + str(i) for i in range(n_pc)]
+    print 'Transforming Raw Data to {} Principal Components'.format(n_pc)
+    t0 = time()
+    pc_df = pd.DataFrame(data=pca.transform(raw_data), columns=pc_col_names)
+    print 'Finished in {sec:.{rd}f} seconds'.format(sec=time() - t0, rd=2)
+    id_lst = [re.sub('\D', '', f) for f in file_list]
+    id_dict = {'id' : id_lst}
+    id_df = pd.DataFrame(data=id_dict)
+    principal_components = pd.concat([id_df, pc_df], axis=1)
+            
+    return (pca, principal_components)
+    
     
 def main():
     IMG_DIR = '../data/train/'
+    STD_SIZE = (350, 233)   #Change to None to recalculate
+    BAD_FILES = ['../data/train/11402.jpg', '../data/train/36911.jpg']
 
 ################################################################################
 ## Pre-Process the Data   
@@ -97,34 +156,52 @@ def main():
     img_files.sort() # ensure labels and examples are in same order
     
     # get standard size and empty or corrupted files
-    std_size, bad_files = get_med_size(img_files)
-       
+    if STD_SIZE is None:
+        t0 = time()
+        print 'Getting median image size.'
+        std_size, bad_files = get_med_size(img_files)
+        print 'finished in {sec:.{rd}f} seconds'.format(sec=time() - t0, rd=2)
+    else:
+        std_size, bad_files = (STD_SIZE, BAD_FILES)
+                    
     # update image list and training labels to exclude empty or corrupted files
     #img_files = sorted(set(img_files).difference(bad_files))
-    img_clean = [f for f in img_files if f not in bad_files]
-    bad_ids = [int(re.sub('\D', '', fpath)) for fpath in bad_files]
+    img_clean = np.array([f for f in img_files if f not in bad_files])
+    bad_ids = [re.sub('\D', '', fpath) for fpath in bad_files]
     train_clean = train[~train.id.isin(bad_ids)]
-    trainY = train_clean.values[:, 1:]
     
-    ## PICK TRAINING EXAMPLES FOR PCA BEFORE CONTINUING
+    # Partition the training data into train and validation
+    np.random.seed(6156)
+    test_pct = 0.25
+    in_train = np.random.uniform(size = len(img_clean)) > test_pct
+    Xtrainf, Xtestf = img_clean[in_train], img_clean[~in_train]
+    Ytrain, Yval = train_clean[in_train], train_clean[~in_train]
     
-    # Represent images as flattened RGB Matrices of equal length
-    m, n = len(img_clean), np.prod(std_size) * 3
-    trainX = np.zeros((m, n), dtype='uint8')
-    for i in range(m):
-        try:
-            trainX[i] = represent_image(img_clean[i], std_size)
-        except ValueError as e:
-            print img_clean[i]
-            print e
+    # Sample the training data to find principal components
+    pca_pct = 1./2 # Only half the data fits in RAM at one time
+    in_pca = np.random.uniform(size = len(Xtrainf)) < pca_pct
+    pca_files = Xtrainf[in_pca]
     
-################################################################################
-## Partition the training data into train and validation
-
-    Xtrain, Xtest, Ytrain, Ytest = train_test_split(
-        trainX, trainY, test_size=0.25, random_state=6156)
+    # Use Randomized PCA to reduce the dimensions of the images
+    if os.path.isfile('pca.pkl'):
+        with open('pca.pkl', 'rb') as f:
+            pca = dill.load(f)
+    else:
+        pca = None
+    pca, pca_transformed = reduce_dim(file_list=pca_files, resize=std_size, pca=pca)
+    pca, remaining_train = reduce_dim(file_list=Xtrainf[~in_pca], resize=std_size, pca=pca)   
+        
+    # Recombine training data and write to csv
+    df_train_x = pd.concat([pca_transformed, remaining_train], axis=0)
+    df_train = df_train_x.merge(Ytrain, on='id', how='inner')
+    df_train.to_csv('./train_pca.csv', index=False)
     
+    # Process validation data
+    pca, Xval = reduce_dim(file_list=Xtestf, resize=std_size, pca=pca)
+    df_val = Xval.merge(Yval, on='id', how='inner')
+    df_val.to_csv('./val_pca.csv', index=False)
     
-    
+            
+        
 if __name__ == '__main__':
     main()
